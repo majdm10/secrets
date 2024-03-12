@@ -3,7 +3,8 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const encrypt = require("mongoose-encryption");
+const bcrypt = require("bcrypt");
+const saltRounds = 10;
 
 const app = express();
 
@@ -22,11 +23,6 @@ const userSchema = new mongoose.Schema({
   password: String,
 });
 
-userSchema.plugin(encrypt, {
-  secret: process.env.SECRET,
-  encryptedFields: ["password"],
-});
-
 const User = mongoose.model("User", userSchema);
 
 app.get("/", function (req, res) {
@@ -42,13 +38,20 @@ app.get("/register", function (req, res) {
 });
 
 app.post("/register", async function (req, res) {
-  const newUser = new User({
-    email: req.body.username,
-    password: req.body.password,
-  });
-
   try {
+    // Use bcrypt.hash with await to wait for the hash to be generated
+    const hash = await bcrypt.hash(req.body.password, saltRounds);
+
+    // Create a new user with the hashed password
+    const newUser = new User({
+      email: req.body.username,
+      password: hash, // Use the generated hash instead of md5 hash
+    });
+
+    // Save the new user to the database
     await newUser.save();
+
+    // Render the secrets page on successful registration
     res.render("secrets");
   } catch (err) {
     console.log(err);
@@ -62,10 +65,20 @@ app.post("/login", async function (req, res) {
   const password = req.body.password;
 
   try {
+    // Find the user by their email
     const user = await User.findOne({ email: username });
-    if (user && user.password === password) {
-      res.render("secrets");
+    if (user) {
+      // Use bcrypt.compare to check if the entered password matches the stored hashed password
+      const match = await bcrypt.compare(password, user.password);
+      if (match) {
+        // If the passwords match, render the secrets page
+        res.render("secrets");
+      } else {
+        // If the passwords do not match, send an invalid login message
+        res.send("Invalid username or password");
+      }
     } else {
+      // If no user is found with the provided email
       res.send("Invalid username or password");
     }
   } catch (err) {
