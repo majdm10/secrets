@@ -3,8 +3,9 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
-const saltRounds = 10;
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
 
@@ -16,6 +17,24 @@ app.use(
   })
 );
 
+app.use(
+  session({
+    secret: "Our little secret.",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+      sameSite: true,
+      httpOnly: true,
+      path: "/",
+    },
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 mongoose.connect("mongodb://localhost:27017/userDB");
 
 const userSchema = new mongoose.Schema({
@@ -23,7 +42,14 @@ const userSchema = new mongoose.Schema({
   password: String,
 });
 
+userSchema.plugin(passportLocalMongoose);
+
 const User = mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", function (req, res) {
   res.render("home");
@@ -37,54 +63,55 @@ app.get("/register", function (req, res) {
   res.render("register");
 });
 
-app.post("/register", async function (req, res) {
-  try {
-    // Use bcrypt.hash with await to wait for the hash to be generated
-    const hash = await bcrypt.hash(req.body.password, saltRounds);
-
-    // Create a new user with the hashed password
-    const newUser = new User({
-      email: req.body.username,
-      password: hash, // Use the generated hash instead of md5 hash
-    });
-
-    // Save the new user to the database
-    await newUser.save();
-
-    // Render the secrets page on successful registration
+app.get("/secrets", function (req, res) {
+  if (req.isAuthenticated()) {
     res.render("secrets");
-  } catch (err) {
-    console.log(err);
-    // Optionally, handle the error in a user-friendly way
-    res.status(500).send("An error occurred");
+  } else {
+    res.redirect("/login");
   }
 });
 
-app.post("/login", async function (req, res) {
-  const username = req.body.username;
-  const password = req.body.password;
-
-  try {
-    // Find the user by their email
-    const user = await User.findOne({ email: username });
-    if (user) {
-      // Use bcrypt.compare to check if the entered password matches the stored hashed password
-      const match = await bcrypt.compare(password, user.password);
-      if (match) {
-        // If the passwords match, render the secrets page
-        res.render("secrets");
-      } else {
-        // If the passwords do not match, send an invalid login message
-        res.send("Invalid username or password");
-      }
-    } else {
-      // If no user is found with the provided email
-      res.send("Invalid username or password");
+app.get("/logout", function (req, res) {
+  req.logout(function (err) {
+    if (err) {
+      console.log(err);
     }
-  } catch (err) {
-    console.log(err);
-    res.status(500).send("An error occurred");
-  }
+  });
+  res.redirect("/");
+});
+
+app.post("/register", async function (req, res) {
+  User.register(
+    { username: req.body.username },
+    req.body.password,
+    function (err, user) {
+      if (err) {
+        console.log(err);
+        res.redirect("/register");
+      } else {
+        passport.authenticate("local")(req, res, function () {
+          res.redirect("/secrets");
+        });
+      }
+    }
+  );
+});
+
+app.post("/login", async function (req, res) {
+  const user = new User({
+    username: req.body.username,
+    password: req.body.password,
+  });
+
+  req.login(user, function (err) {
+    if (err) {
+      console.log(err);
+    } else {
+      passport.authenticate("local")(req, res, function () {
+        res.redirect("/secrets");
+      });
+    }
+  });
 });
 
 app.listen(3000, function () {
